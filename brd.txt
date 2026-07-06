@@ -319,6 +319,7 @@ Please do not randomly patch bugs. Keep the PDF rendering and coordinate convers
 * Updated Auto fit to compare portrait and landscape using the crop size and choose the orientation with more fitted items.
 * Export now computes source page size from the saved PDF during generation, so export works even after reloads or after navigating directly to Export.
 * PDF export embeds bundled Noto Sans CJK fonts via fontkit so Japanese and Chinese variable text can render correctly in generated PDFs.
+* Bundled CJK font assets must resolve through the Vite base URL so PDF export works on localhost and GitHub Pages subpath hosting.
 * Export font size scales from template space to printed output space and applies auto-fit against variable box width and height.
 * Generate PDF downloads the generated file immediately instead of creating a second Download PDF button.
 * Print action opens the generated PDF in the browser PDF viewer for printing instead of printing the whole app page.

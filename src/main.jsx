@@ -57,8 +57,8 @@ const CSV_ENCODINGS = [
 ];
 
 const PDF_FONTS = {
-  regular: "/fonts/NotoSansCJKjp-Regular.otf",
-  bold: "/fonts/NotoSansCJKjp-Bold.otf",
+  regular: `${import.meta.env.BASE_URL}fonts/NotoSansCJKjp-Regular.otf`,
+  bold: `${import.meta.env.BASE_URL}fonts/NotoSansCJKjp-Bold.otf`,
 };
 
 const VARIABLE_MIN_PIXELS = 6;
@@ -2127,7 +2127,9 @@ async function loadPdfFonts(outputDoc) {
 }
 
 function assertFontResponse(response) {
-  if (!response.ok) throw new Error("Could not load the bundled CJK font for PDF export.");
+  if (!response.ok) {
+    throw new Error(`Could not load the bundled CJK font for PDF export: ${response.status} ${response.url}`);
+  }
   return response;
 }
 
