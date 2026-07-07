@@ -63,6 +63,11 @@ const PDF_FONTS = {
 };
 
 const VARIABLE_MIN_PIXELS = 6;
+const MAPPING_FUNCTION_PREFIX = "__fn__";
+const MAPPING_FUNCTIONS = [
+  { key: `${MAPPING_FUNCTION_PREFIX}today_yyyy_mm_dd`, labelKey: "mapping.function.todayYyyyMmDd" },
+  { key: `${MAPPING_FUNCTION_PREFIX}today_yyyymmdd`, labelKey: "mapping.function.todayYyyymmdd" },
+];
 
 const NAV = [
   { id: "templates", titleKey: "page.templates.title", flowKey: "nav.source", icon: Layers },
@@ -726,8 +731,9 @@ function App() {
       const y = paper.height - layout.marginY - (rowIndex + 1) * cellHeight - rowIndex * layout.gapY + (cellHeight - itemHeight) / 2;
       outputPage.drawPage(embeddedPage, { x, y, width: itemWidth, height: itemHeight });
       activeTemplate.variables.forEach((variable) => {
-        const header = activeMapping[variable.id];
-        const text = String(row[header] ?? variable.displayName ?? "");
+        const source = activeMapping[variable.id];
+        const value = resolveMappedValue(source, row);
+        const text = String(value !== "" ? value : variable.displayName ?? "");
         const drawFont = variable.style.fontWeight === "bold" ? boldFont : regularFont;
         const box = {
           x: x + variable.xRatio * itemWidth,
@@ -1534,6 +1540,10 @@ function MappingPage({
   const [selectedDropVariableId, setSelectedDropVariableId] = useState("");
   const previewValues = useMemo(() => previewValuesFromRow(template, dataset, mapping, dataset?.rows?.[0]), [template, dataset, mapping]);
   const mappedHeaders = new Set(Object.values(mapping).filter(Boolean));
+  const mappingFunctions = useMemo(
+    () => MAPPING_FUNCTIONS.map((item) => ({ ...item, label: t(item.labelKey), sample: resolveMappedValue(item.key, {}) })),
+    [t],
+  );
   const assignHeader = (variableId, header) => {
     if (!variableId || !header) return;
     updateMapping(variableId, header);
@@ -1595,11 +1605,11 @@ function MappingPage({
               <div className="mapping-drop-list">
                 {template.variables.length === 0 && <EmptyState title={t("mapping.noVariables")} text={t("mapping.noVariablesText")} />}
                 {template.variables.map((variable) => {
-                  const header = mapping[variable.id] ?? "";
+                  const source = mapping[variable.id] ?? "";
                   return (
                     <button
                       key={variable.id}
-                      className={`mapping-drop-row ${selectedDropVariableId === variable.id ? "selected" : ""} ${header ? "mapped" : ""}`}
+                      className={`mapping-drop-row ${selectedDropVariableId === variable.id ? "selected" : ""} ${source ? "mapped" : ""}`}
                       onClick={() => setSelectedDropVariableId(variable.id)}
                       onDragOver={(event) => event.preventDefault()}
                       onDrop={(event) => assignHeader(variable.id, event.dataTransfer.getData("text/plain"))}
@@ -1609,16 +1619,16 @@ function MappingPage({
                         <small>{variable.key}</small>
                       </span>
                       <span className="mapping-target">
-                        {header ? (
+                        {source ? (
                           <>
-                            <strong>{header}</strong>
-                            <small>{sampleValue(dataset, header)}</small>
+                            <strong>{mappingSourceLabel(source, t)}</strong>
+                            <small>{sampleValue(dataset, source)}</small>
                           </>
                         ) : (
                           <em>{t("mapping.dropCsvField")}</em>
                         )}
                       </span>
-                      {header && (
+                      {source && (
                         <span
                           role="button"
                           tabIndex={0}
@@ -1655,6 +1665,19 @@ function MappingPage({
                   >
                     <strong>{header}</strong>
                     <small>{sampleValue(dataset, header)}</small>
+                  </button>
+                ))}
+                <div className="mapping-functions-head">{t("mapping.functions")}</div>
+                {mappingFunctions.map((fn) => (
+                  <button
+                    key={fn.key}
+                    className={`csv-field-chip mapping-function-chip ${mappedHeaders.has(fn.key) ? "used" : ""}`}
+                    draggable
+                    onDragStart={(event) => event.dataTransfer.setData("text/plain", fn.key)}
+                    onClick={() => clickHeader(fn.key)}
+                  >
+                    <strong>{fn.label}</strong>
+                    <small>{fn.sample}</small>
                   </button>
                 ))}
               </div>
@@ -2191,6 +2214,7 @@ function getPrintableRows(dataset, selectedRowIds) {
 }
 
 function sampleValue(dataset, header) {
+  if (isMappingFunction(header)) return resolveMappedValue(header, {});
   const value = dataset?.rows?.find((row) => row[header] !== undefined && row[header] !== "")?.[header];
   return value ? `sample: ${value}` : "-";
 }
@@ -2208,12 +2232,45 @@ function getRowCopyCount(rowCopies, rowId) {
 }
 
 function previewValuesFromRow(template, dataset, mapping, row) {
-  if (!template || !dataset || !row) return {};
+  if (!template) return {};
+  const currentRow = row ?? {};
   return template.variables.reduce((values, variable) => {
-    const header = mapping?.[variable.id];
-    if (header && row[header] !== undefined && row[header] !== "") values[variable.id] = String(row[header]);
+    const source = mapping?.[variable.id];
+    const value = resolveMappedValue(source, currentRow);
+    if (source && value !== "") values[variable.id] = String(value);
     return values;
   }, {});
+}
+
+function isMappingFunction(source) {
+  return typeof source === "string" && source.startsWith(MAPPING_FUNCTION_PREFIX);
+}
+
+function formatTodayDate(format) {
+  const date = new Date();
+  const yyyy = String(date.getFullYear());
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  if (format === "yyyy/mm/dd") return `${yyyy}/${mm}/${dd}`;
+  if (format === "yyyymmdd") return `${yyyy}${mm}${dd}`;
+  return "";
+}
+
+function resolveMappedValue(source, row) {
+  if (!source) return "";
+  if (!isMappingFunction(source)) {
+    const value = row?.[source];
+    return value === undefined || value === null ? "" : String(value);
+  }
+  if (source === `${MAPPING_FUNCTION_PREFIX}today_yyyy_mm_dd`) return formatTodayDate("yyyy/mm/dd");
+  if (source === `${MAPPING_FUNCTION_PREFIX}today_yyyymmdd`) return formatTodayDate("yyyymmdd");
+  return "";
+}
+
+function mappingSourceLabel(source, t) {
+  if (!isMappingFunction(source)) return source;
+  const found = MAPPING_FUNCTIONS.find((item) => item.key === source);
+  return found ? t(found.labelKey) : source;
 }
 
 function getCropPointSize(template, fallbackPageSize = null) {
