@@ -192,7 +192,7 @@ function App() {
       setPageSize(null);
       if (!activeTemplate?.sourcePdf?.dataBase64) return;
       const bytes = base64ToArrayBuffer(activeTemplate.sourcePdf.dataBase64);
-      const loaded = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
+      const { loaded, normalizedBytes } = await loadPdfJsDocumentWithFallback(bytes.slice(0));
       if (cancelled) return;
       const nextPageNumber = activeTemplate.sourcePdf.pageNumber ?? 1;
       const page = await loaded.getPage(nextPageNumber);
@@ -203,6 +203,14 @@ function App() {
       setPageCount(loaded.numPages);
       setPageNumber(nextPageNumber);
       setPageSize(nextPageSize);
+      if (normalizedBytes && activeTemplate?.templateId) {
+        updateTemplate(activeTemplate.templateId, {
+          sourcePdf: {
+            ...activeTemplate.sourcePdf,
+            dataBase64: arrayBufferToBase64(normalizedBytes),
+          },
+        });
+      }
       if (!activeTemplate.sourcePdf.pageSize) {
         updateTemplate(activeTemplate.templateId, {
           sourcePdf: { ...activeTemplate.sourcePdf, pageSize: nextPageSize },
@@ -2586,6 +2594,28 @@ async function loadPdfFonts(outputDoc) {
   const regularFont = await outputDoc.embedFont(regularBytes, { subset: false });
   const boldFont = await outputDoc.embedFont(boldBytes, { subset: false });
   return { regularFont, boldFont };
+}
+
+async function loadPdfJsDocumentWithFallback(arrayBuffer) {
+  try {
+    const loaded = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+    return { loaded, normalizedBytes: null };
+  } catch (originalError) {
+    const normalizedBytes = await tryNormalizePdfBytes(arrayBuffer);
+    if (!normalizedBytes) throw originalError;
+    const loaded = await pdfjsLib.getDocument({ data: new Uint8Array(normalizedBytes) }).promise;
+    return { loaded, normalizedBytes };
+  }
+}
+
+async function tryNormalizePdfBytes(arrayBuffer) {
+  try {
+    const doc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+    const bytes = await doc.save({ useObjectStreams: false });
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  } catch {
+    return null;
+  }
 }
 
 function assertFontResponse(response) {
