@@ -68,6 +68,11 @@ if (typeof Uint8Array.prototype.toHex !== "function") {
   };
 }
 
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.mjs",
+  import.meta.url,
+).toString();
+
 const PAPER_SIZES = {
   A4: { width: 595.28, height: 841.89 },
   A3: { width: 841.89, height: 1190.55 },
@@ -92,7 +97,7 @@ const MAPPING_FUNCTIONS = [
   { key: `${MAPPING_FUNCTION_PREFIX}today_yyyy_mm_dd`, labelKey: "mapping.function.todayYyyyMmDd" },
   { key: `${MAPPING_FUNCTION_PREFIX}today_yyyymmdd`, labelKey: "mapping.function.todayYyyymmdd" },
 ];
-const APP_VERSION = "v1.0003";
+const APP_VERSION = "v1.0004";
 
 const NAV = [
   { id: "setup", titleKey: "page.setup.title", flowKey: "nav.setup", icon: Layers },
