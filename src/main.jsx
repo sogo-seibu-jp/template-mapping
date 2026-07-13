@@ -39,6 +39,24 @@ import { loadProject, saveProject } from "./utils/storage";
 import uiText from "./i18n/ui-text.json";
 import "./styles.css";
 
+// pdfjs-dist 5.x may call proposed Map helpers that are missing in older browsers.
+if (typeof Map.prototype.getOrInsert !== "function") {
+  Map.prototype.getOrInsert = function getOrInsert(key, defaultValue) {
+    if (this.has(key)) return this.get(key);
+    this.set(key, defaultValue);
+    return defaultValue;
+  };
+}
+
+if (typeof Map.prototype.getOrInsertComputed !== "function") {
+  Map.prototype.getOrInsertComputed = function getOrInsertComputed(key, compute) {
+    if (this.has(key)) return this.get(key);
+    const value = compute(key);
+    this.set(key, value);
+    return value;
+  };
+}
+
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.mjs",
   import.meta.url,
