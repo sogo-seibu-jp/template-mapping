@@ -98,7 +98,7 @@ const MAPPING_FUNCTIONS = [
   { key: `${MAPPING_FUNCTION_PREFIX}today_yyyymmdd`, labelKey: "mapping.function.todayYyyymmdd" },
 ];
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/svg+xml", "image/webp"]);
-const APP_VERSION = "v1.0101";
+const APP_VERSION = "v1.0102";
 
 const NAV = [
   { id: "setup", titleKey: "page.setup.title", flowKey: "nav.setup", icon: Layers },
@@ -363,6 +363,52 @@ function App() {
   useEffect(() => {
     requestAnimationFrame(() => drawCropPreview());
   }, [view, designerMode, fieldZoom, activeTemplate?.cropArea, activeTemplate?.variables, renderBox, pdfDoc, pageNumber]);
+
+  useEffect(() => {
+    const canPasteSource = view === "setup" || (view === "designer" && designerMode === "crop");
+    if (!canPasteSource) return undefined;
+
+    function onPaste(event) {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")
+      ) {
+        return;
+      }
+
+      const clipboardItems = Array.from(event.clipboardData?.items ?? []);
+      if (!clipboardItems.length) return;
+
+      const imageItem = clipboardItems.find((item) => item.kind === "file" && IMAGE_MIME_TYPES.has(item.type));
+      if (!imageItem) {
+        setStatus(t("status.clipboardImageMissing"));
+        return;
+      }
+
+      event.preventDefault();
+      const extMap = {
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/svg+xml": "svg",
+        "image/webp": "webp",
+      };
+      const extension = extMap[imageItem.type] ?? "png";
+      imageItem
+        .getAsFile()
+        ?.arrayBuffer()
+        .then((bytes) => {
+          const pastedFile = new File([bytes], `pasted-source.${extension}`, { type: imageItem.type });
+          return ingestTemplateSourceFile(pastedFile);
+        })
+        .catch((error) => setStatus(error?.message || t("status.sourceUploadUnsupported")));
+    }
+
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("paste", onPaste);
+    };
+  }, [view, designerMode, t]);
 
   function setCropPreviewNode(node) {
     cropPreviewRef.current = node;
