@@ -2242,7 +2242,10 @@ function DesignerPage(props) {
           <div className="variable-list">
             {template.variables.length === 0 && <p className="muted">{t("designer.noFields")}</p>}
             {template.variables.map((variable) => (
-              <div key={variable.id} className={`variable-list-row ${variable.id === selectedVariableId ? "selected" : ""}`}>
+              <div
+                key={variable.id}
+                className={`variable-list-row ${selectedVariableIds.includes(variable.id) ? "selected" : ""} ${variable.id === selectedVariableId ? "active" : ""}`}
+              >
                 <button onClick={(event) => {
                   if (event.shiftKey) {
                     const exists = selectedVariableIds.includes(variable.id);
@@ -2349,6 +2352,8 @@ function TemplateCanvas({
               if (!editable) return;
               const additive = event.shiftKey;
               if (additive) {
+                event.preventDefault();
+                event.stopPropagation();
                 const exists = selectedVariableIds.includes(variable.id);
                 const next = exists
                   ? selectedVariableIds.filter((id) => id !== variable.id)
@@ -2364,14 +2369,7 @@ function TemplateCanvas({
             onClick={(event) => {
               if (!editable) return;
               const additive = event.shiftKey;
-              if (additive) {
-                const exists = selectedVariableIds.includes(variable.id);
-                const next = exists
-                  ? selectedVariableIds.filter((id) => id !== variable.id)
-                  : [...selectedVariableIds, variable.id];
-                setSelection(next[next.length - 1] ?? "", next);
-                return;
-              }
+              if (additive) return;
               setSelection(variable.id, [variable.id]);
               if (setSelectedVariableId) setSelectedVariableId(variable.id);
             }}
@@ -3596,12 +3594,15 @@ function normalizeColor(value) {
 function resolveFieldBackgroundColor(value, fallback = "transparent") {
   if (!value || value === "transparent") return fallback;
   const normalized = String(value).trim().toLowerCase().replace(/\s+/g, "");
+  const isWhiteRgba = /^rgba\(255,255,255,(0|0?\.\d+|1(?:\.0+)?)\)$/.test(normalized);
+  const isWhiteRgb = /^rgb\(255,255,255\)$/.test(normalized);
   if (
     normalized === "white"
     || normalized === "#fff"
     || normalized === "#ffffff"
-    || normalized === "rgb(255,255,255)"
-    || normalized === "rgba(255,255,255,0.42)"
+    || normalized === "#ffffffff"
+    || isWhiteRgb
+    || isWhiteRgba
   ) {
     return "#ffffff";
   }

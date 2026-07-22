@@ -1149,12 +1149,18 @@ button:not(.primary) .spinner {
 }
 
 .variable-box.selected {
-  background: rgba(217, 137, 29, 0.18);
-  outline: 2px solid #d9891d;
+  background: rgba(217, 137, 29, 0.24);
+  outline: 3px solid #d9891d;
+  box-shadow: 0 0 0 2px rgba(217, 137, 29, 0.26);
+  z-index: 3;
 }
 
 .variable-box.multi-selected {
-  outline: 2px dashed rgba(217, 137, 29, 0.7);
+  background: rgba(217, 137, 29, 0.18);
+  outline: 3px dashed rgba(217, 137, 29, 0.9);
+  outline-offset: 0;
+  box-shadow: 0 0 0 2px rgba(217, 137, 29, 0.34) inset;
+  z-index: 2;
 }
 
 .variable-box .handle {
@@ -1210,6 +1216,21 @@ button:not(.primary) .spinner {
 .variable-list-row.selected {
   background: #fff7e8;
   border-color: #d9891d;
+  box-shadow: inset 0 0 0 1px rgba(217, 137, 29, 0.35);
+}
+
+.variable-list-row.active {
+  box-shadow: inset 4px 0 0 #d9891d;
+}
+
+.variable-list-row.selected > button:first-child {
+  background: #fff1d8;
+  border-radius: 4px;
+}
+
+.variable-list-row.selected strong {
+  color: #8f4e00;
+  font-weight: 800;
 }
 
 .variable-list-row > button:first-child,
@@ -1826,7 +1847,7 @@ button:not(.primary) .spinner {
 .paper-slot,
 .sheet-preview span {
   background: #f1f4f8;
-  border: 1px dashed #aeb8c4;
+  border: 0;
   border-radius: 4px;
   align-items: flex-start;
   display: flex;
@@ -1839,7 +1860,7 @@ button:not(.primary) .spinner {
 .paper-slot.filled,
 .sheet-preview span.filled {
   background: #ffffff;
-  border: 1px solid #1f4fa3;
+  border: 0;
 }
 
 .paper-template {
