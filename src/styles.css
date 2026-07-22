@@ -931,6 +931,31 @@ button:not(.primary) .spinner {
   font-size: 13px;
 }
 
+.snap-toggle {
+  align-items: center;
+  color: #3f587f;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.snap-toggle input {
+  margin: 0;
+  min-height: 0;
+}
+
+.align-tools {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.align-tools button {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
 .debug-inline {
   margin-left: auto;
 }
@@ -1128,8 +1153,32 @@ button:not(.primary) .spinner {
   outline: 2px solid #d9891d;
 }
 
+.variable-box.multi-selected {
+  outline: 2px dashed rgba(217, 137, 29, 0.7);
+}
+
 .variable-box .handle {
   border-color: #d9891d;
+}
+
+.guide-line {
+  pointer-events: none;
+  position: absolute;
+  z-index: 4;
+}
+
+.guide-line-v {
+  background: rgba(49, 104, 193, 0.9);
+  bottom: 0;
+  top: 0;
+  width: 1px;
+}
+
+.guide-line-h {
+  background: rgba(49, 104, 193, 0.9);
+  height: 1px;
+  left: 0;
+  right: 0;
 }
 
 .variable-list {
@@ -1789,7 +1838,7 @@ button:not(.primary) .spinner {
 
 .paper-slot.filled,
 .sheet-preview span.filled {
-  background: #eef4ff;
+  background: #ffffff;
   border: 1px solid #1f4fa3;
 }
 

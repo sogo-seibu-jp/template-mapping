@@ -98,8 +98,11 @@ const MAPPING_FUNCTIONS = [
   { key: `${MAPPING_FUNCTION_PREFIX}today_yyyymmdd`, labelKey: "mapping.function.todayYyyymmdd" },
 ];
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/svg+xml", "image/webp"]);
-const APP_VERSION = "v1.0102";
+const APP_VERSION = "v1.0103";
 const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const SNAP_GRID_SIZE = 8;
+const SNAP_THRESHOLD = 6;
+const HISTORY_LIMIT = 80;
 
 const NAV = [
   { id: "setup", titleKey: "page.setup.title", flowKey: "nav.setup", icon: Layers },
@@ -175,6 +178,10 @@ function App() {
   const [cropPreviewImageUrl, setCropPreviewImageUrl] = useState("");
   const [cropPreviewDisplaySize, setCropPreviewDisplaySize] = useState(null);
   const [selectedVariableId, setSelectedVariableId] = useState("");
+  const [selectedVariableIds, setSelectedVariableIds] = useState([]);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [dragGuides, setDragGuides] = useState({ x: [], y: [] });
+  const [historyState, setHistoryState] = useState({ undoCount: 0, redoCount: 0 });
   const [exportUrl, setExportUrl] = useState("");
   const [status, setStatus] = useState("");
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -187,6 +194,9 @@ function App() {
   const dragRef = useRef(null);
   const setupDragDepthRef = useRef(0);
   const designerDragDepthRef = useRef(0);
+  const historyPastRef = useRef([]);
+  const historyFutureRef = useRef([]);
+  const applyingHistoryRef = useRef(false);
 
   const activeTemplate = templates.find((template) => template.templateId === activeTemplateId) ?? null;
   const activeCsv = csvDatasets.find((dataset) => dataset.id === activeCsvId) ?? null;
@@ -227,6 +237,111 @@ function App() {
     const timeout = window.setTimeout(() => setStatus(""), 4200);
     return () => window.clearTimeout(timeout);
   }, [status]);
+
+  function setSelection(variableId, selectedIds = [variableId]) {
+    setSelectedVariableId(variableId);
+    setSelectedVariableIds(Array.from(new Set(selectedIds.filter(Boolean))));
+  }
+
+  function syncHistoryState() {
+    setHistoryState({ undoCount: historyPastRef.current.length, redoCount: historyFutureRef.current.length });
+  }
+
+  function cloneTemplatesForHistory(items) {
+    return JSON.parse(JSON.stringify(items));
+  }
+
+  function captureHistorySnapshot() {
+    return {
+      templates: cloneTemplatesForHistory(templates),
+      activeTemplateId,
+      selectedVariableId,
+      selectedVariableIds: [...selectedVariableIds],
+      designerMode,
+      cropRect: cropRect ? { ...cropRect } : null,
+    };
+  }
+
+  function restoreHistorySnapshot(snapshot) {
+    applyingHistoryRef.current = true;
+    setTemplates(snapshot.templates);
+    setActiveTemplateId(snapshot.activeTemplateId);
+    setSelectedVariableId(snapshot.selectedVariableId);
+    setSelectedVariableIds(snapshot.selectedVariableIds ?? (snapshot.selectedVariableId ? [snapshot.selectedVariableId] : []));
+    setDesignerMode(snapshot.designerMode ?? "fields");
+    setCropRect(snapshot.cropRect ?? null);
+    setDragGuides({ x: [], y: [] });
+    queueMicrotask(() => {
+      applyingHistoryRef.current = false;
+    });
+  }
+
+  function pushHistorySnapshot() {
+    if (applyingHistoryRef.current) return;
+    historyPastRef.current.push(captureHistorySnapshot());
+    if (historyPastRef.current.length > HISTORY_LIMIT) historyPastRef.current.shift();
+    historyFutureRef.current = [];
+    syncHistoryState();
+  }
+
+  function undoChange() {
+    const snapshot = historyPastRef.current.pop();
+    if (!snapshot) return;
+    historyFutureRef.current.push(captureHistorySnapshot());
+    restoreHistorySnapshot(snapshot);
+    syncHistoryState();
+  }
+
+  function redoChange() {
+    const snapshot = historyFutureRef.current.pop();
+    if (!snapshot) return;
+    historyPastRef.current.push(captureHistorySnapshot());
+    restoreHistorySnapshot(snapshot);
+    syncHistoryState();
+  }
+
+  useEffect(() => {
+    const canHandle = view === "designer" && designerMode === "fields";
+    if (!canHandle) return undefined;
+
+    function onKeyDown(event) {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")
+      ) {
+        return;
+      }
+
+      const isMeta = event.ctrlKey || event.metaKey;
+      if (isMeta && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redoChange(); else undoChange();
+        return;
+      }
+      if (isMeta && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redoChange();
+        return;
+      }
+
+      if (!selectedVariableIds.length || !cropPreviewRef.current) return;
+      const step = event.shiftKey ? 10 : 1;
+      const keyMap = {
+        ArrowLeft: { x: -step, y: 0 },
+        ArrowRight: { x: step, y: 0 },
+        ArrowUp: { x: 0, y: -step },
+        ArrowDown: { x: 0, y: step },
+      };
+      const delta = keyMap[event.key];
+      if (!delta) return;
+      event.preventDefault();
+      nudgeSelectedVariables(delta.x, delta.y);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [view, designerMode, selectedVariableIds, templates, activeTemplateId]);
 
   useEffect(() => {
     const buttons = Array.from(document.querySelectorAll("button, .button"));
@@ -461,7 +576,7 @@ function App() {
     setPdfDoc(null);
     setRenderBox({ width: 0, height: 0, scale: 1 });
     setCropRect(null);
-    setSelectedVariableId("");
+    setSelection("", []);
     setDesignerMode("crop");
     setView("designer");
     setStatus(isPdf ? t("status.pdfUploaded") : t("status.imageUploaded"));
@@ -545,7 +660,7 @@ function App() {
     setTemplates((items) => [template, ...items]);
     setActiveTemplateId(templateId);
     setCropRect(null);
-    setSelectedVariableId("");
+    setSelection("", []);
     setDesignerMode("crop");
     setView("designer");
     setStatus(t("status.newTemplateFromPdf"));
@@ -553,6 +668,7 @@ function App() {
 
   function saveCrop() {
     if (!activeTemplate || !cropRect || !renderBox.width || !renderBox.height) return;
+    pushHistorySnapshot();
     const cropArea = normalizeRect(cropRect, renderBox.width, renderBox.height);
     const sourceType = activeTemplate.sourcePdf?.sourceType ?? "pdf";
     updateTemplate(activeTemplate.templateId, {
@@ -566,6 +682,7 @@ function App() {
 
   function beginCropCreate(event) {
     if (!overlayRef.current || event.target !== event.currentTarget) return;
+    pushHistorySnapshot();
     event.preventDefault();
     const start = screenPointToCanvasPoint(event, overlayRef.current);
     dragRef.current = { kind: "crop-create", start };
@@ -576,6 +693,7 @@ function App() {
 
   function beginCropDrag(event, mode = "move") {
     if (!cropRect || !overlayRef.current) return;
+    pushHistorySnapshot();
     event.preventDefault();
     event.stopPropagation();
     const point = screenPointToCanvasPoint(event, overlayRef.current);
@@ -590,10 +708,29 @@ function App() {
     event.stopPropagation();
     const variable = activeTemplate.variables.find((item) => item.id === variableId);
     if (!variable) return;
-    setSelectedVariableId(variableId);
+    const effectiveSelectedIds = selectedVariableIds.includes(variableId)
+      ? selectedVariableIds
+      : [variableId];
+    setSelection(variableId, effectiveSelectedIds);
+    pushHistorySnapshot();
     const point = screenPointToCanvasPoint(event, cropPreviewRef.current);
     const pixelRect = ratioRectToPixels(variable, cropPreviewRef.current.clientWidth, cropPreviewRef.current.clientHeight);
-    dragRef.current = { kind: "variable", mode, variableId, start: point, initial: pixelRect };
+    if (mode === "move" && effectiveSelectedIds.length > 1) {
+      const initialRects = Object.fromEntries(
+        activeTemplate.variables
+          .filter((item) => effectiveSelectedIds.includes(item.id))
+          .map((item) => [item.id, ratioRectToPixels(item, cropPreviewRef.current.clientWidth, cropPreviewRef.current.clientHeight)]),
+      );
+      dragRef.current = {
+        kind: "variable-group",
+        mode,
+        variableIds: effectiveSelectedIds,
+        start: point,
+        initialRects,
+      };
+    } else {
+      dragRef.current = { kind: "variable", mode, variableId, start: point, initial: pixelRect };
+    }
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", endPointerDrag);
   }
@@ -611,18 +748,59 @@ function App() {
     }
     if (drag.kind === "variable" && cropPreviewRef.current && activeTemplate) {
       const point = screenPointToCanvasPoint(event, cropPreviewRef.current);
-      const next = clampRect(
+      let next = clampRect(
         resizedRect(drag.initial, drag.start, point, drag.mode, VARIABLE_MIN_PIXELS),
         cropPreviewRef.current.clientWidth,
         cropPreviewRef.current.clientHeight,
         VARIABLE_MIN_PIXELS,
       );
+      if (snapEnabled) {
+        const snapContext = getVariableSnapContext(activeTemplate.variables, [drag.variableId]);
+        if (drag.mode === "move") {
+          const snapped = snapMoveRect(next, snapContext, cropPreviewRef.current.clientWidth, cropPreviewRef.current.clientHeight);
+          next = snapped.rect;
+          setDragGuides(snapped.guides);
+        } else {
+          next = snapRectToGrid(next, drag.mode);
+          setDragGuides({ x: [], y: [] });
+        }
+      }
       const normalized = normalizeRect(next, cropPreviewRef.current.clientWidth, cropPreviewRef.current.clientHeight);
       updateVariable(drag.variableId, normalized);
+    }
+    if (drag.kind === "variable-group" && cropPreviewRef.current && activeTemplate) {
+      const point = screenPointToCanvasPoint(event, cropPreviewRef.current);
+      const dx = point.x - drag.start.x;
+      const dy = point.y - drag.start.y;
+      const initialRects = Object.values(drag.initialRects);
+      const bounds = rectBounds(initialRects);
+      let snappedDx = dx;
+      let snappedDy = dy;
+      let guides = { x: [], y: [] };
+      if (snapEnabled) {
+        const movedBounds = { ...bounds, x: bounds.x + dx, y: bounds.y + dy };
+        const snapContext = getVariableSnapContext(activeTemplate.variables, drag.variableIds);
+        const snapped = snapMoveRect(movedBounds, snapContext, cropPreviewRef.current.clientWidth, cropPreviewRef.current.clientHeight);
+        snappedDx = snapped.rect.x - bounds.x;
+        snappedDy = snapped.rect.y - bounds.y;
+        guides = snapped.guides;
+      }
+      setDragGuides(guides);
+      const width = cropPreviewRef.current.clientWidth;
+      const height = cropPreviewRef.current.clientHeight;
+      updateTemplate(activeTemplate.templateId, {
+        variables: activeTemplate.variables.map((item) => {
+          const initial = drag.initialRects[item.id];
+          if (!initial) return item;
+          const moved = clampRect({ ...initial, x: initial.x + snappedDx, y: initial.y + snappedDy }, width, height, VARIABLE_MIN_PIXELS);
+          return { ...item, ...normalizeRect(moved, width, height) };
+        }),
+      });
     }
   }
 
   function endPointerDrag() {
+    setDragGuides({ x: [], y: [] });
     dragRef.current = null;
     window.removeEventListener("pointermove", handlePointerMove);
     window.removeEventListener("pointerup", endPointerDrag);
@@ -728,8 +906,9 @@ function App() {
       heightRatio: 0.16,
       style: { ...defaultStyle },
     };
+    pushHistorySnapshot();
     updateTemplate(activeTemplate.templateId, { variables: [...activeTemplate.variables, next] });
-    setSelectedVariableId(id);
+    setSelection(id, [id]);
   }
 
   function duplicateVariable(variableId = selectedVariableId) {
@@ -747,8 +926,9 @@ function App() {
       yRatio: Math.min(0.95 - source.heightRatio, source.yRatio + 0.02),
       style: { ...source.style },
     };
+    pushHistorySnapshot();
     updateTemplate(activeTemplate.templateId, { variables: [...activeTemplate.variables, next] });
-    setSelectedVariableId(id);
+    setSelection(id, [id]);
   }
 
   function updateVariable(variableId, patch) {
@@ -759,20 +939,189 @@ function App() {
   }
 
   function updateSelectedVariable(patch) {
+    pushHistorySnapshot();
     if (selectedVariableId) updateVariable(selectedVariableId, patch);
   }
 
   function updateSelectedVariableStyle(patch) {
     if (!selectedVariableId || !selectedVariable) return;
+    pushHistorySnapshot();
     updateVariable(selectedVariableId, { style: { ...selectedVariable.style, ...patch } });
   }
 
   function deleteVariable(variableId) {
     if (!activeTemplate) return;
+    pushHistorySnapshot();
     updateTemplate(activeTemplate.templateId, {
       variables: activeTemplate.variables.filter((item) => item.id !== variableId),
     });
     if (selectedVariableId === variableId) setSelectedVariableId("");
+    setSelectedVariableIds((current) => current.filter((id) => id !== variableId));
+  }
+
+  function getVariableSnapContext(variables, excludedIds = []) {
+    const x = [];
+    const y = [];
+    variables
+      .filter((item) => !excludedIds.includes(item.id))
+      .forEach((item) => {
+        x.push(item.xRatio, item.xRatio + item.widthRatio / 2, item.xRatio + item.widthRatio);
+        y.push(item.yRatio, item.yRatio + item.heightRatio / 2, item.yRatio + item.heightRatio);
+      });
+    return { x, y };
+  }
+
+  function rectBounds(rectangles) {
+    if (!rectangles.length) return { x: 0, y: 0, width: 0, height: 0 };
+    const minX = Math.min(...rectangles.map((rect) => rect.x));
+    const minY = Math.min(...rectangles.map((rect) => rect.y));
+    const maxX = Math.max(...rectangles.map((rect) => rect.x + rect.width));
+    const maxY = Math.max(...rectangles.map((rect) => rect.y + rect.height));
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+
+  function snapMoveRect(rect, snapContext, width, height) {
+    const normalizeX = (value) => value / width;
+    const normalizeY = (value) => value / height;
+    const denormalizeX = (ratio) => ratio * width;
+    const denormalizeY = (ratio) => ratio * height;
+
+    const rectPointsX = [
+      { value: normalizeX(rect.x), offset: 0 },
+      { value: normalizeX(rect.x + rect.width / 2), offset: -rect.width / 2 },
+      { value: normalizeX(rect.x + rect.width), offset: -rect.width },
+    ];
+    const rectPointsY = [
+      { value: normalizeY(rect.y), offset: 0 },
+      { value: normalizeY(rect.y + rect.height / 2), offset: -rect.height / 2 },
+      { value: normalizeY(rect.y + rect.height), offset: -rect.height },
+    ];
+
+    const thresholdX = SNAP_THRESHOLD / width;
+    const thresholdY = SNAP_THRESHOLD / height;
+
+    let bestX = null;
+    rectPointsX.forEach((point) => {
+      snapContext.x.forEach((target) => {
+        const diff = Math.abs(target - point.value);
+        if (diff <= thresholdX && (!bestX || diff < bestX.diff)) {
+          bestX = { diff, x: denormalizeX(target) + point.offset, guide: denormalizeX(target) };
+        }
+      });
+    });
+
+    let bestY = null;
+    rectPointsY.forEach((point) => {
+      snapContext.y.forEach((target) => {
+        const diff = Math.abs(target - point.value);
+        if (diff <= thresholdY && (!bestY || diff < bestY.diff)) {
+          bestY = { diff, y: denormalizeY(target) + point.offset, guide: denormalizeY(target) };
+        }
+      });
+    });
+
+    const snapped = { ...rect };
+    const guides = { x: [], y: [] };
+    if (bestX) {
+      snapped.x = bestX.x;
+      guides.x.push(bestX.guide);
+    }
+    if (bestY) {
+      snapped.y = bestY.y;
+      guides.y.push(bestY.guide);
+    }
+
+    return { rect: clampRect(snapped, width, height, VARIABLE_MIN_PIXELS), guides };
+  }
+
+  function snapRectToGrid(rect, mode = "move") {
+    const snapped = { ...rect };
+    if (mode === "move" || mode.includes("w") || mode.includes("e")) {
+      snapped.x = Math.round(snapped.x / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+      snapped.width = Math.round(snapped.width / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+    }
+    if (mode === "move" || mode.includes("n") || mode.includes("s")) {
+      snapped.y = Math.round(snapped.y / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+      snapped.height = Math.round(snapped.height / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+    }
+    return snapped;
+  }
+
+  function nudgeSelectedVariables(dxPixels, dyPixels) {
+    if (!activeTemplate || !selectedVariableIds.length || !cropPreviewRef.current) return;
+    pushHistorySnapshot();
+    const width = cropPreviewRef.current.clientWidth || cropPreviewDisplaySize?.width;
+    const height = cropPreviewRef.current.clientHeight || cropPreviewDisplaySize?.height;
+    if (!width || !height) return;
+    const dxRatio = dxPixels / width;
+    const dyRatio = dyPixels / height;
+    const selectedIds = new Set(selectedVariableIds);
+    updateTemplate(activeTemplate.templateId, {
+      variables: activeTemplate.variables.map((item) => {
+        if (!selectedIds.has(item.id)) return item;
+        return {
+          ...item,
+          xRatio: clampNumber(item.xRatio + dxRatio, 0, 1 - item.widthRatio),
+          yRatio: clampNumber(item.yRatio + dyRatio, 0, 1 - item.heightRatio),
+        };
+      }),
+    });
+  }
+
+  function applySelectedVariableLayout(action) {
+    if (!activeTemplate || selectedVariableIds.length < 2) return;
+    const selectedSet = new Set(selectedVariableIds);
+    const selected = activeTemplate.variables.filter((item) => selectedSet.has(item.id));
+    if (selected.length < 2) return;
+    pushHistorySnapshot();
+
+    const minX = Math.min(...selected.map((item) => item.xRatio));
+    const maxRight = Math.max(...selected.map((item) => item.xRatio + item.widthRatio));
+    const minY = Math.min(...selected.map((item) => item.yRatio));
+    const maxBottom = Math.max(...selected.map((item) => item.yRatio + item.heightRatio));
+    const centerX = (minX + maxRight) / 2;
+    const centerY = (minY + maxBottom) / 2;
+
+    const nextById = Object.fromEntries(selected.map((item) => [item.id, { ...item }]));
+
+    if (action === "align-left") selected.forEach((item) => { nextById[item.id].xRatio = minX; });
+    if (action === "align-center") selected.forEach((item) => { nextById[item.id].xRatio = centerX - item.widthRatio / 2; });
+    if (action === "align-right") selected.forEach((item) => { nextById[item.id].xRatio = maxRight - item.widthRatio; });
+    if (action === "align-top") selected.forEach((item) => { nextById[item.id].yRatio = minY; });
+    if (action === "align-middle") selected.forEach((item) => { nextById[item.id].yRatio = centerY - item.heightRatio / 2; });
+    if (action === "align-bottom") selected.forEach((item) => { nextById[item.id].yRatio = maxBottom - item.heightRatio; });
+
+    if (action === "distribute-h") {
+      const sorted = [...selected].sort((a, b) => a.xRatio - b.xRatio);
+      const firstCenter = sorted[0].xRatio + sorted[0].widthRatio / 2;
+      const lastCenter = sorted[sorted.length - 1].xRatio + sorted[sorted.length - 1].widthRatio / 2;
+      const step = (lastCenter - firstCenter) / (sorted.length - 1);
+      sorted.forEach((item, index) => {
+        nextById[item.id].xRatio = firstCenter + step * index - item.widthRatio / 2;
+      });
+    }
+
+    if (action === "distribute-v") {
+      const sorted = [...selected].sort((a, b) => a.yRatio - b.yRatio);
+      const firstCenter = sorted[0].yRatio + sorted[0].heightRatio / 2;
+      const lastCenter = sorted[sorted.length - 1].yRatio + sorted[sorted.length - 1].heightRatio / 2;
+      const step = (lastCenter - firstCenter) / (sorted.length - 1);
+      sorted.forEach((item, index) => {
+        nextById[item.id].yRatio = firstCenter + step * index - item.heightRatio / 2;
+      });
+    }
+
+    updateTemplate(activeTemplate.templateId, {
+      variables: activeTemplate.variables.map((item) => {
+        const next = nextById[item.id];
+        if (!next) return item;
+        return {
+          ...item,
+          xRatio: clampNumber(next.xRatio, 0, 1 - item.widthRatio),
+          yRatio: clampNumber(next.yRatio, 0, 1 - item.heightRatio),
+        };
+      }),
+    });
   }
 
   async function handleCsvUpload(event) {
@@ -875,7 +1224,8 @@ function App() {
       const sourceType = template.sourcePdf.sourceType ?? "pdf";
       setPageNumber(sourceType === "pdf" ? template.sourcePdf.pageNumber : 1);
     }
-    setSelectedVariableId("");
+    setSelection("", []);
+    setDragGuides({ x: [], y: [] });
     setDesignerMode(mode);
     setView("designer");
   }
@@ -888,7 +1238,7 @@ function App() {
     updateTemplate(templateId, { cropArea: null, variables: [] });
     if (templateId === activeTemplateId) {
       setCropRect(null);
-      setSelectedVariableId("");
+      setSelection("", []);
       setDesignerMode("crop");
     }
     setStatus(t("status.cropRemoved"));
@@ -907,7 +1257,7 @@ function App() {
     if (activeTemplateId === templateId) {
       const nextTemplate = remaining[0] ?? null;
       setActiveTemplateId(nextTemplate?.templateId ?? "");
-      setSelectedVariableId("");
+      setSelection("", []);
       setCropRect(null);
       setCropPreviewImageUrl("");
       setPdfDoc(null);
@@ -1217,7 +1567,9 @@ function App() {
             onPdfUpload={handleTemplateSourceUpload}
             cropPreviewRef={setCropPreviewNode}
             selectedVariableId={selectedVariableId}
+            selectedVariableIds={selectedVariableIds}
             setSelectedVariableId={setSelectedVariableId}
+            setSelection={setSelection}
             selectedVariable={selectedVariable}
             beginVariableDrag={beginVariableDrag}
             addVariable={addVariable}
@@ -1227,6 +1579,14 @@ function App() {
             updateVariableStyle={updateSelectedVariableStyle}
             cropPreviewImageUrl={cropPreviewImageUrl}
             cropPreviewDisplaySize={cropPreviewDisplaySize}
+            dragGuides={dragGuides}
+            snapEnabled={snapEnabled}
+            setSnapEnabled={setSnapEnabled}
+            canUndo={historyState.undoCount > 0}
+            canRedo={historyState.redoCount > 0}
+            undoChange={undoChange}
+            redoChange={redoChange}
+            alignSelected={applySelectedVariableLayout}
             designerDropActive={designerDropActive}
             onSourceDragEnter={(event) => handleSourceDragEnter(event, setDesignerDropActive, designerDragDepthRef)}
             onSourceDragOver={(event) => handleSourceDragOver(event, setDesignerDropActive)}
@@ -1742,7 +2102,9 @@ function DesignerPage(props) {
     onPdfUpload,
     cropPreviewRef,
     selectedVariableId,
+    selectedVariableIds,
     setSelectedVariableId,
+    setSelection,
     selectedVariable,
     beginVariableDrag,
     addVariable,
@@ -1752,6 +2114,14 @@ function DesignerPage(props) {
     updateVariableStyle,
     cropPreviewImageUrl,
     cropPreviewDisplaySize,
+    dragGuides,
+    snapEnabled,
+    setSnapEnabled,
+    canUndo,
+    canRedo,
+    undoChange,
+    redoChange,
+    alignSelected,
     designerDropActive,
     onSourceDragEnter,
     onSourceDragOver,
@@ -1806,10 +2176,26 @@ function DesignerPage(props) {
           ) : (
             <>
               <button className="primary" onClick={addField}><Plus size={16} /> {t("designer.addField")}</button>
+              <button onClick={undoChange} disabled={!canUndo}><ChevronLeft size={16} /> {t("button.undo")}</button>
+              <button onClick={redoChange} disabled={!canRedo}><ChevronRight size={16} /> {t("button.redo")}</button>
+              <label className="snap-toggle">
+                <input type="checkbox" checked={snapEnabled} onChange={(event) => setSnapEnabled(event.target.checked)} />
+                <span>{t("designer.snapToGrid")}</span>
+              </label>
               <div className="zoom-controls" aria-label="Fields zoom controls">
                 <button onClick={() => setFieldZoom((zoom) => Math.max(0.5, Number((zoom - 0.1).toFixed(2))))}>-</button>
                 <span>{Math.round(fieldZoom * 100)}%</span>
                 <button onClick={() => setFieldZoom((zoom) => Math.min(3, Number((zoom + 0.1).toFixed(2))))}>+</button>
+              </div>
+              <div className="align-tools">
+                <button disabled={selectedVariableIds.length < 2} onClick={() => alignSelected("align-left")}>{t("button.alignLeft")}</button>
+                <button disabled={selectedVariableIds.length < 2} onClick={() => alignSelected("align-center")}>{t("button.alignCenter")}</button>
+                <button disabled={selectedVariableIds.length < 2} onClick={() => alignSelected("align-right")}>{t("button.alignRight")}</button>
+                <button disabled={selectedVariableIds.length < 2} onClick={() => alignSelected("align-top")}>{t("button.alignTop")}</button>
+                <button disabled={selectedVariableIds.length < 2} onClick={() => alignSelected("align-middle")}>{t("button.alignMiddle")}</button>
+                <button disabled={selectedVariableIds.length < 2} onClick={() => alignSelected("align-bottom")}>{t("button.alignBottom")}</button>
+                <button disabled={selectedVariableIds.length < 3} onClick={() => alignSelected("distribute-h")}>{t("button.distributeH")}</button>
+                <button disabled={selectedVariableIds.length < 3} onClick={() => alignSelected("distribute-v")}>{t("button.distributeV")}</button>
               </div>
               <span className="meta">{t("designer.savedFields", { count: template.variables.length })}</span>
               {!inspectorOpen && <button onClick={() => setInspectorOpen(true)}><ListChecks size={16} /> {t("designer.fieldsPanel")}</button>}
@@ -1834,10 +2220,13 @@ function DesignerPage(props) {
             template={template}
             cropPreviewRef={cropPreviewRef}
             selectedVariableId={selectedVariableId}
+            selectedVariableIds={selectedVariableIds}
             setSelectedVariableId={setSelectedVariableId}
+            setSelection={setSelection}
             beginVariableDrag={beginVariableDrag}
             cropImageUrl={cropPreviewImageUrl}
             cropPreviewDisplaySize={cropPreviewDisplaySize}
+            dragGuides={dragGuides}
           />
         )}
       </div>
@@ -1854,7 +2243,17 @@ function DesignerPage(props) {
             {template.variables.length === 0 && <p className="muted">{t("designer.noFields")}</p>}
             {template.variables.map((variable) => (
               <div key={variable.id} className={`variable-list-row ${variable.id === selectedVariableId ? "selected" : ""}`}>
-                <button onClick={() => setSelectedVariableId(variable.id)}>
+                <button onClick={(event) => {
+                  if (event.shiftKey) {
+                    const exists = selectedVariableIds.includes(variable.id);
+                    const next = exists
+                      ? selectedVariableIds.filter((id) => id !== variable.id)
+                      : [...selectedVariableIds, variable.id];
+                    setSelection(next[next.length - 1] ?? "", next);
+                    return;
+                  }
+                  setSelection(variable.id, [variable.id]);
+                }}>
                   <strong>{variable.displayName}</strong>
                   <span>{variable.key}</span>
                 </button>
@@ -1893,11 +2292,14 @@ function TemplateCanvas({
   template,
   cropPreviewRef,
   selectedVariableId,
+  selectedVariableIds = [],
   setSelectedVariableId,
+  setSelection,
   beginVariableDrag,
   previewValues = {},
   cropImageUrl = "",
   cropPreviewDisplaySize = null,
+  dragGuides = { x: [], y: [] },
 }) {
   const editable = Boolean(beginVariableDrag);
   const previewStyle = cropPreviewDisplaySize
@@ -1924,25 +2326,55 @@ function TemplateCanvas({
     <div className="crop-preview" ref={cropPreviewRef} style={previewStyle}>
       {cropImageUrl ? <img className="crop-preview-image" src={cropImageUrl} alt="" /> : <canvas />}
       <div className="variable-layer">
+        {(dragGuides.x || []).map((xValue) => <span key={`gx-${xValue}`} className="guide-line guide-line-v" style={{ left: xValue }} />)}
+        {(dragGuides.y || []).map((yValue) => <span key={`gy-${yValue}`} className="guide-line guide-line-h" style={{ top: yValue }} />)}
         {template.variables.map((variable) => (
           <div
             key={variable.id}
-            className={`variable-box ${selectedVariableId === variable.id ? "selected" : ""}`}
+            className={`variable-box ${selectedVariableId === variable.id ? "selected" : ""} ${selectedVariableIds.includes(variable.id) ? "multi-selected" : ""}`}
             style={{
               left: `${variable.xRatio * 100}%`,
               top: `${variable.yRatio * 100}%`,
               width: `${variable.widthRatio * 100}%`,
               height: `${variable.heightRatio * 100}%`,
               color: variable.style.color,
-              backgroundColor: variable.style.backgroundColor || "rgba(255, 255, 255, 0.42)",
+              backgroundColor: resolveFieldBackgroundColor(variable.style.backgroundColor, "rgba(255, 255, 255, 0.42)"),
               fontSize: Math.max(5, variable.style.fontSize * previewFontScale),
               fontWeight: variable.style.fontWeight,
               justifyContent: justify(variable.style.textAlign),
               alignItems: align(variable.style.verticalAlign),
               textAlign: variable.style.textAlign,
             }}
-            onPointerDown={(event) => editable && beginVariableDrag(event, variable.id, "move")}
-            onClick={() => editable && setSelectedVariableId(variable.id)}
+            onPointerDown={(event) => {
+              if (!editable) return;
+              const additive = event.shiftKey;
+              if (additive) {
+                const exists = selectedVariableIds.includes(variable.id);
+                const next = exists
+                  ? selectedVariableIds.filter((id) => id !== variable.id)
+                  : [...selectedVariableIds, variable.id];
+                setSelection(next[next.length - 1] ?? "", next);
+                return;
+              }
+              if (!additive && !selectedVariableIds.includes(variable.id)) {
+                setSelection(variable.id, [variable.id]);
+              }
+              beginVariableDrag(event, variable.id, "move");
+            }}
+            onClick={(event) => {
+              if (!editable) return;
+              const additive = event.shiftKey;
+              if (additive) {
+                const exists = selectedVariableIds.includes(variable.id);
+                const next = exists
+                  ? selectedVariableIds.filter((id) => id !== variable.id)
+                  : [...selectedVariableIds, variable.id];
+                setSelection(next[next.length - 1] ?? "", next);
+                return;
+              }
+              setSelection(variable.id, [variable.id]);
+              if (setSelectedVariableId) setSelectedVariableId(variable.id);
+            }}
           >
             <span
               className="variable-text"
@@ -1950,7 +2382,7 @@ function TemplateCanvas({
             >
               {previewValues[variable.id] ?? variable.displayName}
             </span>
-            {editable && selectedVariableId === variable.id && RESIZE_HANDLES.map((mode) => (
+            {editable && selectedVariableId === variable.id && selectedVariableIds.length <= 1 && RESIZE_HANDLES.map((mode) => (
               <span
                 key={mode}
                 className={`handle handle-${mode}`}
@@ -2639,7 +3071,7 @@ function PaperTemplateSlot({ template, cropImageUrl, previewValues, style, fontS
               width: `${variable.widthRatio * 100}%`,
               height: `${variable.heightRatio * 100}%`,
               color: variable.style.color,
-              backgroundColor: variable.style.backgroundColor || "transparent",
+              backgroundColor: resolveFieldBackgroundColor(variable.style.backgroundColor, "transparent"),
               fontSize: Math.max(5, variable.style.fontSize * fontScale),
               fontWeight: variable.style.fontWeight,
               justifyContent: justify(variable.style.textAlign),
@@ -3159,6 +3591,21 @@ function hexToRgb(hex) {
 
 function normalizeColor(value) {
   return value && value !== "transparent" ? value : "#ffffff";
+}
+
+function resolveFieldBackgroundColor(value, fallback = "transparent") {
+  if (!value || value === "transparent") return fallback;
+  const normalized = String(value).trim().toLowerCase().replace(/\s+/g, "");
+  if (
+    normalized === "white"
+    || normalized === "#fff"
+    || normalized === "#ffffff"
+    || normalized === "rgb(255,255,255)"
+    || normalized === "rgba(255,255,255,0.42)"
+  ) {
+    return "#ffffff";
+  }
+  return value;
 }
 
 function justify(value) {
